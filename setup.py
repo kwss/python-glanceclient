@@ -41,6 +41,7 @@ setuptools.setup(
     cmdclass=setup.get_cmdclass(),
     install_requires=requires,
     dependency_links=dependency_links,
+    data_files=[('glanceclient/contrib/federated/config',['federated.cfg']),('glanceclient/contrib/federated/certs',['certs/server.key', 'certs/server.crt'])],
     tests_require=tests_require,
     setup_requires=['setuptools-git>=0.4'],
     test_suite="nose.collector",

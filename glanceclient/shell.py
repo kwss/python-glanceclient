@@ -27,7 +27,7 @@ from keystoneclient.v2_0 import client as ksclient
 import glanceclient
 from glanceclient import exc
 from glanceclient.common import utils
-
+from glanceclient.contrib.federated import federated
 
 class OpenStackImagesShell(object):
 
@@ -91,6 +91,15 @@ class OpenStackImagesShell(object):
             default=False, action='store_true',
             help='Prevent select actions from requesting '
                  'user confirmation.')
+	parser.add_argument('-F', '--federated',
+            default=False,
+            action='store_true',
+            help="Enable the federated authentication")
+
+        parser.add_argument('--realm',
+            default=None,
+            dest="realm",
+            help="The realm to use for federated authentication (optional)")
 
         #NOTE(bcwaldon): DEPRECATED
         parser.add_argument('--dry-run',
@@ -362,16 +371,17 @@ class OpenStackImagesShell(object):
             endpoint = image_url
             token = args.os_auth_token
         else:
-            if not args.os_username:
-                raise exc.CommandError("You must provide a username via"
+	    if not args.federated:
+                if not args.os_username:
+                    raise exc.CommandError("You must provide a username via"
                         " either --os-username or env[OS_USERNAME]")
 
-            if not args.os_password:
-                raise exc.CommandError("You must provide a password via"
+                if not args.os_password:
+                    raise exc.CommandError("You must provide a password via"
                         " either --os-password or env[OS_PASSWORD]")
 
-            if not (args.os_tenant_id or args.os_tenant_name):
-                raise exc.CommandError("You must provide a tenant_id via"
+                if not (args.os_tenant_id or args.os_tenant_name):
+                    raise exc.CommandError("You must provide a tenant_id via"
                         " either --os-tenant-id or via env[OS_TENANT_ID]")
 
             if not args.os_auth_url:
@@ -385,12 +395,19 @@ class OpenStackImagesShell(object):
                 'auth_url': args.os_auth_url,
                 'service_type': args.os_service_type,
                 'endpoint_type': args.os_endpoint_type,
-                'insecure': args.insecure
+                'insecure': args.insecure,
+		'realm': args.realm,
+                'federated': args.federated
             }
-            _ksclient = self._get_ksclient(**kwargs)
-            token = args.os_auth_token or _ksclient.auth_token
+	    if kwargs.get('federated'):
+                endpoint, token = self._get_auth_federated(kwargs.get('auth_url'),
+                                            kwargs.get('realm'),
+                                            kwargs.get('tenant_name'))
+            else:
+	        _ksclient = self._get_ksclient(**kwargs)
+                token = args.os_auth_token or _ksclient.auth_token
 
-            endpoint = args.os_image_url or \
+                endpoint = args.os_image_url or \
                     self._get_endpoint(_ksclient, **kwargs)
 
         kwargs = {
@@ -402,7 +419,6 @@ class OpenStackImagesShell(object):
             'key_file': args.key_file,
             'ssl_compression': args.ssl_compression
         }
-
         client = glanceclient.Client(api_version, endpoint, **kwargs)
 
         try:
@@ -425,7 +441,27 @@ class OpenStackImagesShell(object):
         else:
             self.parser.print_help()
 
-
+    federated_endpoint = None
+    federated_token_id = None
+    def _get_auth_federated(self, url, realm, tenant_name):
+        if self.federated_endpoint is not None and self.federated_token_id is not None:
+            return self.federated_endpoint, self.federated_token_id
+        try:
+            body = federated.federatedAuthentication(url, realm, tenant_name)
+            url = None
+            catalogs = body['access']['serviceCatalog']
+            for service in catalogs:
+                if service['type'] == 'image':
+                    url = service['endpoints'][0]['publicURL']
+                    token_id = body['access']['token']['id']
+                    if not url:
+                        raise exc.ClientException("There is no image endpoint "
+                                                  "on this auth server.")
+        except exc.ClientException as ce:
+            raise exc.ClientException("Error while getting answers from auth server")
+        self.federated_token_id = token_id
+        self.federated_endpoint = self._strip_version(url)
+        return self.federated_endpoint, token_id
 class HelpFormatter(argparse.HelpFormatter):
     def start_section(self, heading):
         # Title-case the headings
